@@ -1,0 +1,8 @@
+-- db/init.sql
+CREATE TABLE IF NOT EXISTS tasks (
+                                     id SERIAL PRIMARY KEY,
+                                     title TEXT NOT NULL,
+                                     description TEXT,
+                                     completed BOOLEAN DEFAULT FALSE,
+                                     created_at TIMESTAMP DEFAULT now()
+    );

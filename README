@@ -1,0 +1,41 @@
+# 1) В корне проекта
+# Создать сеть
+docker network create todo-net
+
+# 2) Построить образы
+docker build -t todo-db ./db
+docker build -t todo-backend ./backend
+docker build -t todo-frontend ./frontend
+
+# 3) Запустить контейнер базы
+docker run -d --name todo-db \
+  --network todo-net \
+  -e POSTGRES_USER=todo \
+  -e POSTGRES_PASSWORD=todo \
+  -e POSTGRES_DB=todo \
+  -v todo_pgdata:/var/lib/postgresql/data \
+  todo-db
+
+# Подождать пару секунд, чтобы postgres создал БД (инициализация init.sql выполнится автоматически)
+
+# 4) Запустить backend (подключится к контейнеру todo-db по имени)
+docker run -d --name todo-back \
+  --network todo-net \
+  -p 4000:4000 \
+  -e DB_HOST=todo-db \
+  -e DB_PORT=5432 \
+  -e DB_USER=todo \
+  -e DB_PASS=todo \
+  -e DB_NAME=todo \
+  -e SMTP_HOST=mailhog \
+  -e SMTP_PORT=1025 \
+  todo-backend
+
+# 5) Запустить MailHog (локальный SMTP для разработки) — опционально, полезно для тестирования отправки почты:
+docker run -d --name mailhog --network todo-net -p 8025:8025 -p 1025:1025 mailhog/mailhog
+
+# 6) Запустить фронтенд (nginx служит статику на порту 80)
+docker run -d --name todo-front \
+  --network todo-net \
+  -p 3000:80 \
+  todo-frontend

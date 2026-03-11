@@ -1,0 +1,8 @@
+body { font-family: Arial, sans-serif; background:#f6f8fa; color:#222; }
+.container { width:900px; margin:30px auto; padding:20px; background:white; border-radius:8px; box-shadow:0 2px 8px rgba(0,0,0,0.08); }
+form { margin-bottom:16px; display:flex; gap:8px; }
+input { padding:8px; flex:1; }
+button { padding:8px 12px; }
+table { width:100%; border-collapse:collapse; margin-top:12px; }
+td,th { padding:8px; border-bottom:1px solid #eee; text-align:left; }
+.actions button { margin-right:6px; }

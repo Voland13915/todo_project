@@ -1,28 +1,76 @@
 <!doctype html>
-<html>
+<html lang="en">
 <head>
-    <meta charset="utf-8" />
+    <meta charset="utf-8"/>
     <title>ToDo List</title>
-    <meta name="viewport" content="width=device-width,initial-scale=1" />
-    <link rel="stylesheet" href="style.css" />
+    <meta name="viewport" content="width=device-width,initial-scale=1"/>
+    <link rel="preconnect" href="https://fonts.googleapis.com"/>
+    <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet"/>
+    <link rel="stylesheet" href="style.css"/>
 </head>
 <body>
-<div class="container">
-    <h1>ToDo List</h1>
+<div class="bg-grid"></div>
 
-    <form id="taskForm">
-        <input id="title" placeholder="Title" required />
-        <input id="description" placeholder="Description" />
-        <button type="submit">Add task</button>
-    </form>
+<div class="app">
+    <header class="header">
+        <div class="header-left">
+            <span class="logo-dot"></span>
+            <h1>Tasks</h1>
+        </div>
+        <div class="header-stats">
+            <span id="stat-total">0 total</span>
+            <span class="stat-sep">·</span>
+            <span id="stat-done">0 done</span>
+        </div>
+    </header>
 
-    <table id="tasksTable">
-        <thead><tr><th>ID</th><th>Title</th><th>Done</th><th>Actions</th></tr></thead>
-        <tbody></tbody>
-    </table>
+    <div class="add-form">
+        <input id="inp-title" type="text" placeholder="Task title..." autocomplete="off"/>
+        <input id="inp-desc" type="text" placeholder="Description (optional)..." autocomplete="off"/>
+        <button id="btn-add" onclick="addTask()">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 3v10M3 8h10" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+            Add task
+        </button>
+    </div>
 
-    <div id="detail"></div>
+    <div class="filters">
+        <button class="filter-btn active" data-filter="all" onclick="setFilter('all',this)">All</button>
+        <button class="filter-btn" data-filter="active" onclick="setFilter('active',this)">Active</button>
+        <button class="filter-btn" data-filter="done" onclick="setFilter('done',this)">Done</button>
+    </div>
+
+    <div id="task-list" class="task-list"></div>
+    <div id="empty" class="empty hidden">No tasks yet. Add one above!</div>
 </div>
+
+<!-- Detail Modal -->
+<div id="modal" class="modal hidden" onclick="closeModal(event)">
+    <div class="modal-box">
+        <button class="modal-close" onclick="closeModal()">✕</button>
+        <div class="modal-badge" id="modal-badge"></div>
+        <h2 id="modal-title"></h2>
+        <p id="modal-desc"></p>
+        <div class="modal-meta">
+            <span id="modal-id"></span>
+            <span id="modal-date"></span>
+        </div>
+    </div>
+</div>
+
+<!-- Send Email Modal -->
+<div id="email-modal" class="modal hidden" onclick="closeEmailModal(event)">
+    <div class="modal-box">
+        <button class="modal-close" onclick="closeEmailModal()">✕</button>
+        <h2>Send task by email</h2>
+        <p id="email-task-name" style="color:var(--accent);font-weight:600;margin-bottom:1rem"></p>
+        <input id="email-to" type="email" placeholder="recipient@example.com" style="width:100%;margin-bottom:1rem"/>
+        <button class="btn-primary" style="width:100%" onclick="submitSendEmail()">
+            Send
+        </button>
+        <div id="email-status" style="margin-top:.75rem;font-size:.85rem;text-align:center"></div>
+    </div>
+</div>
+
 <script src="main.js"></script>
 </body>
 </html>

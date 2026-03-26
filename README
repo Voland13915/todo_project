@@ -1,13 +1,17 @@
-# 1) В корне проекта
-# Создать сеть
+# 0. Очистка (если запускали раньше)
+docker rm -f todo-db todo-back todo-front mailhog
+docker volume rm todo_pgdata
+docker network rm todo-net
+
+# 1. Сеть
 docker network create todo-net
 
-# 2) Построить образы
+# 2. Сборка
 docker build -t todo-db ./db
-docker build -t todo-backend ./backend
+docker build -t todo-backend ./backend   # <-- исправить mail.js перед этим!
 docker build -t todo-frontend ./frontend
 
-# 3) Запустить контейнер базы
+# 3. БД
 docker run -d --name todo-db \
   --network todo-net \
   -e POSTGRES_USER=todo \
@@ -16,26 +20,29 @@ docker run -d --name todo-db \
   -v todo_pgdata:/var/lib/postgresql/data \
   todo-db
 
-# Подождать пару секунд, чтобы postgres создал БД (инициализация init.sql выполнится автоматически)
+# 4. Ждём БД (важно!)
+docker logs -f todo-db
+# Ctrl+C когда увидите "ready to accept connections"
 
-# 4) Запустить backend (подключится к контейнеру todo-db по имени)
-docker run -d --name todo-back \
-  --network todo-net \
-  -p 4000:4000 \
-  -e DB_HOST=todo-db \
-  -e DB_PORT=5432 \
-  -e DB_USER=todo \
-  -e DB_PASS=todo \
-  -e DB_NAME=todo \
-  -e SMTP_HOST=mailhog \
-  -e SMTP_PORT=1025 \
-  todo-backend
-
-# 5) Запустить MailHog (локальный SMTP для разработки) — опционально, полезно для тестирования отправки почты:
+# 5. MailHog
 docker run -d --name mailhog --network todo-net -p 8025:8025 -p 1025:1025 mailhog/mailhog
 
-# 6) Запустить фронтенд (nginx служит статику на порту 80)
-docker run -d --name todo-front \
-  --network todo-net \
-  -p 3000:80 \
-  todo-frontend
+# 6. Backend
+docker run -d --name todo-back --network todo-net  -p 4000:4000 -e DB_HOST=todo-db -e DB_PORT=5432 -e DB_USER=todo -e DB_PASS=todo -e DB_NAME=todo -e SMTP_HOST=mailhog -e SMTP_PORT=1025 todo-backend
+
+# 7. Frontend
+docker run -d --name todo-front --network todo-net -p 3000:80 todo-frontend
+
+#8. Проверка
+docker logs todo-back
+
+
+При повторном запуске
+docker start todo-db mailhog todo-back todo-front
+
+
+
+
+docker run -d --name todo-back --network todo-net -p 4000:4000 --env-file ./backend/.env todo-backend
+
+docker stop todo-back && docker rm todo-back && docker build -t todo-backend ./backend && docker run -d --name todo-back --network todo-net -p 4000:4000 --env-file ./backend/.env todo-backend

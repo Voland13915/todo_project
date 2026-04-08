@@ -165,6 +165,43 @@
 
   // ── Helpers ───────────────────────────────────────────────────────────────
   const fmt = (d) => new Date(d).toLocaleDateString('en-GB', { day:'2-digit', month:'short', year:'2-digit' })
+
+  // ── IMAP / POP3 ───────────────────────────────────────────────────────────
+  let imapResult  = null
+  let imapLoading = false
+  let imapError   = ''
+
+  let pop3Result  = null
+  let pop3Loading = false
+  let pop3Error   = ''
+
+  const checkImap = async () => {
+    imapLoading = true; imapError = ''; imapResult = null
+    try {
+      const res  = await fetch(`${API}/email/imap`)
+      const json = await res.json()
+      if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`)
+      imapResult = json
+    } catch (e) {
+      imapError = e.message
+    } finally {
+      imapLoading = false
+    }
+  }
+
+  const checkPop3 = async () => {
+    pop3Loading = true; pop3Error = ''; pop3Result = null
+    try {
+      const res  = await fetch(`${API}/email/pop3`)
+      const json = await res.json()
+      if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`)
+      pop3Result = json
+    } catch (e) {
+      pop3Error = e.message
+    } finally {
+      pop3Loading = false
+    }
+  }
 </script>
 
 <!-- ── Topbar ─────────────────────────────────────────────────────────────── -->
@@ -294,6 +331,90 @@
           <span>No tasks found</span>
         </div>
       {/each}
+    </div>
+  </section>
+
+  <!-- ── Email Protocols ───────────────────────────────────────────────────── -->
+  <section class="proto-section">
+    <header class="proto-head">
+      <h2>Email Protocols</h2>
+      <p class="page-sub">Check incoming mail via IMAP and POP3</p>
+    </header>
+
+    <div class="proto-grid">
+
+      <!-- IMAP Card -->
+      <div class="proto-card">
+        <div class="proto-card-top">
+          <div class="proto-icon proto-icon-imap">
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+              <rect x="1" y="2" width="12" height="10" rx="2" stroke="#fff" stroke-width="1.3"/>
+              <path d="M1 5l6 4 6-4" stroke="#fff" stroke-width="1.3"/>
+            </svg>
+          </div>
+          <div>
+            <div class="proto-title">IMAP</div>
+            <div class="proto-sub">Internet Message Access Protocol · port 993</div>
+          </div>
+        </div>
+        <p class="proto-desc">Reads messages directly on the server without downloading. Supports folders and flags.</p>
+        <button class="btn-proto" on:click={checkImap} disabled={imapLoading}>
+          {#if imapLoading}Connecting…{:else}Check IMAP inbox{/if}
+        </button>
+        {#if imapError}
+          <div class="proto-result proto-result-err">
+            <span class="dot dot-red"></span>{imapError}
+          </div>
+        {/if}
+        {#if imapResult}
+          <div class="proto-result proto-result-ok">
+            <span class="dot dot-green"></span>
+            Connected · {imapResult.count} message{imapResult.count !== 1 ? 's' : ''} found
+          </div>
+          {#if imapResult.messages && imapResult.messages.length}
+            <ul class="msg-list">
+              {#each imapResult.messages as m}
+                <li class="msg-item">
+                  <span class="msg-from">{(m.header?.from?.[0] || 'Unknown').slice(0, 48)}</span>
+                  <span class="msg-subj">{(m.header?.subject?.[0] || '(no subject)').slice(0, 60)}</span>
+                </li>
+              {/each}
+            </ul>
+          {/if}
+        {/if}
+      </div>
+
+      <!-- POP3 Card -->
+      <div class="proto-card">
+        <div class="proto-card-top">
+          <div class="proto-icon proto-icon-pop3">
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+              <rect x="1" y="2" width="12" height="10" rx="2" stroke="#fff" stroke-width="1.3"/>
+              <path d="M4 7h6M7 4v6" stroke="#fff" stroke-width="1.3" stroke-linecap="round"/>
+            </svg>
+          </div>
+          <div>
+            <div class="proto-title">POP3</div>
+            <div class="proto-sub">Post Office Protocol v3 · port 995</div>
+          </div>
+        </div>
+        <p class="proto-desc">Downloads messages from the server to a local client. Simple, stateless protocol.</p>
+        <button class="btn-proto" on:click={checkPop3} disabled={pop3Loading}>
+          {#if pop3Loading}Connecting…{:else}Check POP3 mailbox{/if}
+        </button>
+        {#if pop3Error}
+          <div class="proto-result proto-result-err">
+            <span class="dot dot-red"></span>{pop3Error}
+          </div>
+        {/if}
+        {#if pop3Result}
+          <div class="proto-result proto-result-ok">
+            <span class="dot dot-green"></span>
+            Connected · {pop3Result.messageCount} message{pop3Result.messageCount !== 1 ? 's' : ''} in mailbox
+          </div>
+        {/if}
+      </div>
+
     </div>
   </section>
 </main>
@@ -576,4 +697,82 @@
     padding: .6rem 1rem; font-size: .8rem; font-weight: 500;
     box-shadow: 0 4px 24px rgba(0,0,0,.15); animation: rowIn .2s ease; z-index: 200;
   }
+
+  /* ── Email Protocols ── */
+  .proto-section {
+    margin-top: 2rem;
+  }
+  .proto-head {
+    margin-bottom: 1.25rem;
+  }
+  .proto-head h2 {
+    font-size: 1.1rem;
+    font-weight: 600;
+    letter-spacing: -.02em;
+  }
+  .proto-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1rem;
+  }
+  @media (max-width: 600px) {
+    .proto-grid { grid-template-columns: 1fr; }
+  }
+  .proto-card {
+    background: #fff;
+    border: 1px solid #e5e7eb;
+    border-radius: 8px;
+    padding: 1.25rem;
+    box-shadow: 0 1px 3px rgba(0,0,0,.08);
+    display: flex;
+    flex-direction: column;
+    gap: .75rem;
+  }
+  .proto-card-top {
+    display: flex;
+    align-items: center;
+    gap: .75rem;
+  }
+  .proto-icon {
+    width: 32px; height: 32px; border-radius: 7px;
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+  }
+  .proto-icon-imap { background: #2563eb; }
+  .proto-icon-pop3 { background: #7c3aed; }
+  .proto-title { font-size: .875rem; font-weight: 600; color: #111827; }
+  .proto-sub   { font-size: .72rem; color: #9ca3af; margin-top: .1rem; }
+  .proto-desc  { font-size: .8rem; color: #6b7280; line-height: 1.6; }
+  .btn-proto {
+    display: block; width: 100%;
+    background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 6px;
+    color: #374151; font-family: 'Inter', sans-serif; font-size: .8rem;
+    font-weight: 500; padding: .5rem; cursor: pointer;
+    transition: all .12s; text-align: center;
+  }
+  .btn-proto:hover:not(:disabled) { background: #f3f4f6; border-color: #d1d5db; color: #111827; }
+  .btn-proto:disabled { opacity: .55; cursor: not-allowed; }
+  .proto-result {
+    font-size: .78rem; font-weight: 500; display: flex; align-items: flex-start; gap: .4rem;
+    padding: .5rem .75rem; border-radius: 6px; line-height: 1.5;
+  }
+  .proto-result-ok  { background: #f0fdf4; color: #15803d; }
+  .proto-result-err { background: #fef2f2; color: #dc2626; }
+  .dot {
+    width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; margin-top: .25rem;
+  }
+  .dot-green { background: #16a34a; }
+  .dot-red   { background: #dc2626; }
+  .msg-list {
+    list-style: none; padding: 0; margin: 0;
+    display: flex; flex-direction: column; gap: .25rem;
+  }
+  .msg-item {
+    background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 5px;
+    padding: .35rem .6rem;
+    display: flex; flex-direction: column; gap: .1rem;
+  }
+  .msg-from { font-size: .72rem; color: #6b7280; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .msg-subj { font-size: .78rem; color: #111827; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
 </style>

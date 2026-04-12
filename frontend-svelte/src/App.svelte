@@ -558,16 +558,17 @@
 
   /* ── Grid ── */
   .grid-head {
-    display: grid; grid-template-columns: 36px 1fr 100px 90px 170px;
+    display: grid; grid-template-columns: 36px 1fr 100px 90px 200px;
     padding: .5rem 1rem; background: #f9fafb; border-bottom: 1px solid #e5e7eb;
     font-size: .72rem; font-weight: 600; color: #6b7280;
     text-transform: uppercase; letter-spacing: .05em;
   }
   .task-row {
-    display: grid; grid-template-columns: 36px 1fr 100px 90px 170px;
+    display: grid; grid-template-columns: 36px 1fr 100px 90px 200px;
     align-items: center; padding: .65rem 1rem; border-bottom: 1px solid #e5e7eb;
     transition: background .1s; animation: rowIn .2s ease both;
   }
+
   .task-row:last-child { border-bottom: none; }
   .task-row:hover { background: #f9fafb; }
   .done-row { opacity: .6; }

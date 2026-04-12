@@ -1,10 +1,14 @@
 <script>
-  import { onMount } from 'svelte'
+  import { onMount, onDestroy } from 'svelte'
 
   // ── Config ────────────────────────────────────────────────────────────────
   const API = (window.location.hostname === 'localhost')
-    ? 'http://localhost:4000'
-    : `${window.location.protocol}//${window.location.hostname}:4000`
+          ? 'http://localhost:4000'
+          : `${window.location.protocol}//${window.location.hostname}:4000`
+
+  const WS_URL = (window.location.hostname === 'localhost')
+          ? 'ws://localhost:4000/ws'
+          : `ws://${window.location.hostname}:4000/ws`
 
   // ── State ─────────────────────────────────────────────────────────────────
   let todos = []
@@ -30,12 +34,80 @@
   let emailStatus = ''
   let emailColor  = ''
 
+  // ── WebSocket ─────────────────────────────────────────────────────────────
+  let ws = null
+  let wsStatus = 'connecting'   // 'connecting' | 'open' | 'closed'
+  let wsClients = 1
+  let reconnectTimer = null
+  let reconnectDelay = 1500
+
+  function connectWS() {
+    wsStatus = 'connecting'
+    try {
+      ws = new WebSocket(WS_URL)
+    } catch (e) {
+      scheduleReconnect()
+      return
+    }
+
+    ws.onopen = () => {
+      wsStatus = 'open'
+      reconnectDelay = 1500
+      console.log('[WS] Connected')
+    }
+
+    ws.onmessage = (e) => {
+      let msg
+      try { msg = JSON.parse(e.data) } catch { return }
+
+      switch (msg.type) {
+        case 'connected':
+          wsClients = msg.clientCount
+          break
+
+        case 'task_created':
+          // Добавляем только если задачи ещё нет (избегаем дублирование от своего POST)
+          if (!todos.find(t => t.id === msg.payload.id)) {
+            todos = [...todos, msg.payload]
+            showToast(`New task added: "${msg.payload.title}"`, true)
+          }
+          break
+
+        case 'task_updated':
+          todos = todos.map(t => t.id === msg.payload.id ? msg.payload : t)
+          break
+
+        case 'task_deleted':
+          todos = todos.filter(t => t.id !== msg.payload.id)
+          break
+      }
+    }
+
+    ws.onclose = () => {
+      wsStatus = 'closed'
+      console.log('[WS] Disconnected')
+      scheduleReconnect()
+    }
+
+    ws.onerror = () => {
+      wsStatus = 'closed'
+    }
+  }
+
+  function scheduleReconnect() {
+    clearTimeout(reconnectTimer)
+    reconnectTimer = setTimeout(() => {
+      reconnectDelay = Math.min(reconnectDelay * 1.5, 15000)
+      connectWS()
+    }, reconnectDelay)
+  }
+
   // ── Computed ──────────────────────────────────────────────────────────────
   $: visibleTodos = filter === 'done'
-    ? todos.filter(t => t.completed)
-    : filter === 'active'
-      ? todos.filter(t => !t.completed)
-      : todos
+          ? todos.filter(t => t.completed)
+          : filter === 'active'
+                  ? todos.filter(t => !t.completed)
+                  : todos
 
   $: doneCount  = todos.filter(t => t.completed).length
   $: totalCount = todos.length
@@ -51,21 +123,33 @@
     }
   }
 
-  onMount(() => getTodos())
+  onMount(() => {
+    getTodos()
+    connectWS()
+  })
+
+  onDestroy(() => {
+    clearTimeout(reconnectTimer)
+    if (ws) ws.close()
+  })
 
   // ── Create ────────────────────────────────────────────────────────────────
   const createTodo = async (e) => {
     e.preventDefault()
     if (!createTitle.trim()) { showToast('Title is required'); return }
     try {
-      await fetch(`${API}/tasks`, {
+      const res = await fetch(`${API}/tasks`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ title: createTitle.trim(), description: createDesc.trim() })
       })
+      const task = await res.json()
+      // Добавляем сразу локально (WS событие придёт другим)
+      if (!todos.find(t => t.id === task.id)) {
+        todos = [...todos, task]
+      }
       createTitle = ''
       createDesc  = ''
-      getTodos()
       showToast('Task added')
     } catch (e) {
       showToast('Error: ' + e.message)
@@ -74,12 +158,14 @@
 
   // ── Toggle ────────────────────────────────────────────────────────────────
   const toggleDone = async (todo) => {
-    await fetch(`${API}/tasks/${todo.id}`, {
+    const res = await fetch(`${API}/tasks/${todo.id}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ title: todo.title, description: todo.description, completed: !todo.completed })
     })
-    getTodos()
+    const updated = await res.json()
+    // Обновляем локально немедленно (WS обновит других)
+    todos = todos.map(t => t.id === updated.id ? updated : t)
   }
 
   // ── Edit ──────────────────────────────────────────────────────────────────
@@ -93,13 +179,14 @@
     e.preventDefault()
     if (!editTitle.trim()) { showToast('Title cannot be empty'); return }
     const t = todos.find(t => t.id === editingId)
-    await fetch(`${API}/tasks/${editingId}`, {
+    const res = await fetch(`${API}/tasks/${editingId}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ title: editTitle.trim(), description: editDesc.trim(), completed: t.completed })
     })
+    const updated = await res.json()
+    todos = todos.map(t => t.id === updated.id ? updated : t)
     editingId = null
-    getTodos()
     showToast('Saved')
   }
 
@@ -108,7 +195,7 @@
   // ── Delete ────────────────────────────────────────────────────────────────
   const deleteTodo = async (todo) => {
     await fetch(`${API}/tasks/${todo.id}`, { method: 'DELETE' })
-    getTodos()
+    todos = todos.filter(t => t.id !== todo.id)
     showToast('Deleted')
   }
 
@@ -157,8 +244,8 @@
   }
 
   // ── Toast ─────────────────────────────────────────────────────────────────
-  const showToast = (msg) => {
-    toast = msg
+  const showToast = (msg, remote = false) => {
+    toast = { msg, remote }
     clearTimeout(toastTimer)
     toastTimer = setTimeout(() => { toast = null }, 2800)
   }
@@ -218,6 +305,17 @@
     <div class="topbar-right">
       <span class="chip">{totalCount} tasks</span>
       <span class="chip chip-green">{doneCount} done</span>
+      <!-- WS статус -->
+      <span class="ws-indicator" class:ws-open={wsStatus==='open'} class:ws-closed={wsStatus==='closed'} class:ws-connecting={wsStatus==='connecting'} title="WebSocket: {wsStatus}">
+        <span class="ws-dot"></span>
+        {#if wsStatus === 'open'}
+          Live · {wsClients} {wsClients === 1 ? 'user' : 'users'}
+        {:else if wsStatus === 'connecting'}
+          Connecting…
+        {:else}
+          Offline
+        {/if}
+      </span>
     </div>
   </div>
 </nav>
@@ -226,7 +324,7 @@
 <main class="main">
   <header class="page-head">
     <h1>My Tasks</h1>
-    <p class="page-sub">Track and manage your work</p>
+    <p class="page-sub">Track and manage your work · changes sync in real time</p>
   </header>
 
   <!-- Add Form -->
@@ -267,14 +365,11 @@
 
       {#each visibleTodos as todo (todo.id)}
         <div class="task-row" class:done-row={todo.completed}>
-
-          <!-- Checkbox -->
           <span>
             <input type="checkbox" class="task-check" checked={todo.completed}
-              on:change={() => toggleDone(todo)}/>
+                   on:change={() => toggleDone(todo)}/>
           </span>
 
-          <!-- Body / Inline edit -->
           <div class="task-body">
             {#if editingId === todo.id}
               <form on:submit={saveEdit}>
@@ -291,17 +386,14 @@
             {/if}
           </div>
 
-          <!-- Status -->
           <span>
             <span class="status-badge" class:status-done={todo.completed} class:status-active={!todo.completed}>
               {todo.completed ? 'Done' : 'Active'}
             </span>
           </span>
 
-          <!-- Date -->
           <span class="task-date">{fmt(todo.created_at)}</span>
 
-          <!-- Actions -->
           <div class="task-actions">
             {#if editingId === todo.id}
               <button class="act-btn act-save" on:click={saveEdit}>Save</button>
@@ -342,8 +434,6 @@
     </header>
 
     <div class="proto-grid">
-
-      <!-- IMAP Card -->
       <div class="proto-card">
         <div class="proto-card-top">
           <div class="proto-icon proto-icon-imap">
@@ -384,7 +474,6 @@
         {/if}
       </div>
 
-      <!-- POP3 Card -->
       <div class="proto-card">
         <div class="proto-card-top">
           <div class="proto-icon proto-icon-pop3">
@@ -414,7 +503,6 @@
           </div>
         {/if}
       </div>
-
     </div>
   </section>
 </main>
@@ -465,7 +553,15 @@
 
 <!-- ── Toast ──────────────────────────────────────────────────────────────── -->
 {#if toast}
-  <div class="toast">{toast}</div>
+  <div class="toast" class:toast-remote={toast.remote}>
+    {#if toast.remote}
+      <svg width="10" height="10" viewBox="0 0 10 10" fill="none" style="flex-shrink:0">
+        <circle cx="5" cy="5" r="4" stroke="currentColor" stroke-width="1.2"/>
+        <path d="M5 3v2.5l1.5 1" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+      </svg>
+    {/if}
+    {toast.msg}
+  </div>
 {/if}
 
 <style>
@@ -503,6 +599,28 @@
     border-radius: 20px; background: #f3f4f6; color: #6b7280; border: 1px solid #e5e7eb;
   }
   .chip-green { background: #f0fdf4; color: #15803d; border-color: #bbf7d0; }
+
+  /* ── WS Indicator ── */
+  .ws-indicator {
+    display: flex; align-items: center; gap: .35rem;
+    font-size: .72rem; font-weight: 500; padding: .2rem .65rem;
+    border-radius: 20px; border: 1px solid #e5e7eb; color: #6b7280;
+    background: #f9fafb; cursor: default; transition: all .2s;
+  }
+  .ws-dot {
+    width: 6px; height: 6px; border-radius: 50%; background: #d1d5db;
+    transition: background .3s;
+  }
+  .ws-open   { background: #f0fdf4; color: #15803d; border-color: #bbf7d0; }
+  .ws-open .ws-dot   { background: #16a34a; animation: pulse 2s infinite; }
+  .ws-closed { background: #fef2f2; color: #dc2626; border-color: #fecaca; }
+  .ws-closed .ws-dot { background: #dc2626; }
+  .ws-connecting .ws-dot { background: #f59e0b; animation: pulse 1s infinite; }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: .4; }
+  }
 
   /* ── Main ── */
   .main { max-width: 900px; margin: 0 auto; padding: 2.5rem 1.5rem 4rem; }
@@ -568,7 +686,6 @@
     align-items: center; padding: .65rem 1rem; border-bottom: 1px solid #e5e7eb;
     transition: background .1s; animation: rowIn .2s ease both;
   }
-
   .task-row:last-child { border-bottom: none; }
   .task-row:hover { background: #f9fafb; }
   .done-row { opacity: .6; }
@@ -697,47 +814,28 @@
     background: #111827; color: #fff; border-radius: 8px;
     padding: .6rem 1rem; font-size: .8rem; font-weight: 500;
     box-shadow: 0 4px 24px rgba(0,0,0,.15); animation: rowIn .2s ease; z-index: 200;
+    display: flex; align-items: center; gap: .5rem;
+  }
+  /* Тост от другого пользователя — чуть другой цвет */
+  .toast-remote {
+    background: #1d4ed8;
   }
 
   /* ── Email Protocols ── */
-  .proto-section {
-    margin-top: 2rem;
-  }
-  .proto-head {
-    margin-bottom: 1.25rem;
-  }
-  .proto-head h2 {
-    font-size: 1.1rem;
-    font-weight: 600;
-    letter-spacing: -.02em;
-  }
-  .proto-grid {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 1rem;
-  }
-  @media (max-width: 600px) {
-    .proto-grid { grid-template-columns: 1fr; }
-  }
+  .proto-section { margin-top: 2rem; }
+  .proto-head { margin-bottom: 1.25rem; }
+  .proto-head h2 { font-size: 1.1rem; font-weight: 600; letter-spacing: -.02em; }
+  .proto-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+  @media (max-width: 600px) { .proto-grid { grid-template-columns: 1fr; } }
   .proto-card {
-    background: #fff;
-    border: 1px solid #e5e7eb;
-    border-radius: 8px;
-    padding: 1.25rem;
-    box-shadow: 0 1px 3px rgba(0,0,0,.08);
-    display: flex;
-    flex-direction: column;
-    gap: .75rem;
+    background: #fff; border: 1px solid #e5e7eb; border-radius: 8px;
+    padding: 1.25rem; box-shadow: 0 1px 3px rgba(0,0,0,.08);
+    display: flex; flex-direction: column; gap: .75rem;
   }
-  .proto-card-top {
-    display: flex;
-    align-items: center;
-    gap: .75rem;
-  }
+  .proto-card-top { display: flex; align-items: center; gap: .75rem; }
   .proto-icon {
     width: 32px; height: 32px; border-radius: 7px;
-    display: flex; align-items: center; justify-content: center;
-    flex-shrink: 0;
+    display: flex; align-items: center; justify-content: center; flex-shrink: 0;
   }
   .proto-icon-imap { background: #2563eb; }
   .proto-icon-pop3 { background: #7c3aed; }
@@ -759,21 +857,14 @@
   }
   .proto-result-ok  { background: #f0fdf4; color: #15803d; }
   .proto-result-err { background: #fef2f2; color: #dc2626; }
-  .dot {
-    width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; margin-top: .25rem;
-  }
+  .dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; margin-top: .25rem; }
   .dot-green { background: #16a34a; }
   .dot-red   { background: #dc2626; }
-  .msg-list {
-    list-style: none; padding: 0; margin: 0;
-    display: flex; flex-direction: column; gap: .25rem;
-  }
+  .msg-list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: .25rem; }
   .msg-item {
     background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 5px;
-    padding: .35rem .6rem;
-    display: flex; flex-direction: column; gap: .1rem;
+    padding: .35rem .6rem; display: flex; flex-direction: column; gap: .1rem;
   }
   .msg-from { font-size: .72rem; color: #6b7280; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .msg-subj { font-size: .78rem; color: #111827; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-
 </style>

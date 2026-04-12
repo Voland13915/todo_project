@@ -1,0 +1,269 @@
+name: CI/CD — Build, Test & Push
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+env:
+  DOCKER_HUB_USER: ${{ secrets.DOCKERHUB_USERNAME }}
+
+jobs:
+  build-test-push:
+    runs-on: ubuntu-latest
+
+    steps:
+      # ── 1. Получаем код ─────────────────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ── 2. Логин в Docker Hub ────────────────────────────────────────────────
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # ── 3. Создаём Docker-сеть ───────────────────────────────────────────────
+      - name: Create Docker network
+        run: docker network create todo-net
+
+      # ── 4. Собираем образы ───────────────────────────────────────────────────
+      - name: Build DB image
+        run: docker build -t todo-db ./db
+
+      - name: Build Backend image
+        run: docker build -t todo-backend ./backend
+
+      - name: Build Frontend image
+        run: docker build -t todo-frontend ./frontend-svelte
+
+      # ── 5. Запускаем БД ──────────────────────────────────────────────────────
+      - name: Start PostgreSQL container
+        run: |
+          docker run -d \
+            --name todo-db \
+            --network todo-net \
+            -e POSTGRES_USER=todo \
+            -e POSTGRES_PASSWORD=todo \
+            -e POSTGRES_DB=todo \
+            -v todo_pgdata:/var/lib/postgresql/data \
+            todo-db
+
+      # ── 6. Ждём готовности БД ────────────────────────────────────────────────
+      - name: Wait for PostgreSQL to be ready
+        run: |
+          echo "Waiting for PostgreSQL..."
+          for i in $(seq 1 30); do
+            if docker exec todo-db pg_isready -U todo -d todo > /dev/null 2>&1; then
+              echo "PostgreSQL is ready after ${i} attempts"
+              exit 0
+            fi
+            echo "Attempt ${i}/30 — not ready yet, sleeping 2s..."
+            sleep 2
+          done
+          echo "ERROR: PostgreSQL did not become ready in time"
+          docker logs todo-db
+          exit 1
+
+      # ── 7. Запускаем бэкенд ──────────────────────────────────────────────────
+      - name: Start Backend container
+        run: |
+          docker run -d \
+            --name todo-back \
+            --network todo-net \
+            -p 4000:4000 \
+            -e PORT=4000 \
+            -e DB_HOST=todo-db \
+            -e DB_PORT=5432 \
+            -e DB_USER=todo \
+            -e DB_PASS=todo \
+            -e DB_NAME=todo \
+            -e SMTP_HOST=localhost \
+            -e SMTP_PORT=1025 \
+            -e SMTP_SECURE=false \
+            -e SMTP_USER=ci@example.com \
+            -e SMTP_PASS=ci_pass \
+            -e IMAP_HOST=localhost \
+            -e IMAP_PORT=993 \
+            -e IMAP_TLS=false \
+            -e IMAP_USER=ci@example.com \
+            -e IMAP_PASS=ci_pass \
+            -e POP3_HOST=localhost \
+            -e POP3_PORT=995 \
+            -e POP3_TLS=false \
+            -e POP3_USER=ci@example.com \
+            -e POP3_PASS=ci_pass \
+            todo-backend
+
+      # ── 8. Ждём готовности бэкенда ───────────────────────────────────────────
+      - name: Wait for Backend to be ready
+        run: |
+          echo "Waiting for Backend /health..."
+          for i in $(seq 1 20); do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:4000/health || true)
+            if [ "$STATUS" = "200" ]; then
+              echo "Backend is ready (HTTP 200) after ${i} attempts"
+              exit 0
+            fi
+            echo "Attempt ${i}/20 — got HTTP ${STATUS}, sleeping 2s..."
+            sleep 2
+          done
+          echo "ERROR: Backend did not become ready in time"
+          docker logs todo-back
+          exit 1
+
+      # ── 9. Запускаем фронтенд ────────────────────────────────────────────────
+      - name: Start Frontend container
+        run: |
+          docker run -d \
+            --name todo-front \
+            --network todo-net \
+            -p 3000:80 \
+            todo-frontend
+
+      - name: Wait for Frontend (nginx)
+        run: |
+          for i in $(seq 1 15); do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:3000 || true)
+            if [ "$STATUS" = "200" ]; then
+              echo "Frontend ready after ${i} attempts"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "ERROR: Frontend not ready"
+          docker logs todo-front
+          exit 1
+
+      # ── 10. Функциональные тесты через curl ──────────────────────────────────
+      - name: TEST — Health check
+        run: |
+          echo "=== GET /health ==="
+          curl -sf http://localhost:4000/health | tee /tmp/health.json
+          echo ""
+          # Проверяем что в ответе есть "ok"
+          grep -q '"status":"ok"' /tmp/health.json
+          echo "✓ Health check passed"
+
+      - name: TEST — GET /tasks (empty list)
+        run: |
+          echo "=== GET /tasks ==="
+          RESULT=$(curl -sf http://localhost:4000/tasks)
+          echo "$RESULT"
+          # Ответ должен быть JSON-массивом
+          echo "$RESULT" | python3 -c "import sys, json; data=json.load(sys.stdin); assert isinstance(data, list), 'Expected array'"
+          echo "✓ GET /tasks returned a valid JSON array"
+
+      - name: TEST — POST /tasks (create task)
+        run: |
+          echo "=== POST /tasks ==="
+          RESULT=$(curl -sf -X POST http://localhost:4000/tasks \
+            -H "Content-Type: application/json" \
+            -d '{"title":"CI Test Task","description":"Created by GitHub Actions"}')
+          echo "$RESULT"
+          TASK_ID=$(echo "$RESULT" | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])")
+          echo "Created task ID: $TASK_ID"
+          echo "TASK_ID=$TASK_ID" >> $GITHUB_ENV
+          echo "✓ POST /tasks created task with id=$TASK_ID"
+
+      - name: TEST — GET /tasks/:id
+        run: |
+          echo "=== GET /tasks/$TASK_ID ==="
+          RESULT=$(curl -sf http://localhost:4000/tasks/$TASK_ID)
+          echo "$RESULT"
+          TITLE=$(echo "$RESULT" | python3 -c "import sys,json; print(json.load(sys.stdin)['title'])")
+          [ "$TITLE" = "CI Test Task" ] || (echo "ERROR: wrong title: $TITLE" && exit 1)
+          echo "✓ GET /tasks/$TASK_ID returned correct task"
+
+      - name: TEST — PUT /tasks/:id (update task)
+        run: |
+          echo "=== PUT /tasks/$TASK_ID ==="
+          RESULT=$(curl -sf -X PUT http://localhost:4000/tasks/$TASK_ID \
+            -H "Content-Type: application/json" \
+            -d '{"title":"CI Test Task (updated)","description":"Updated by CI","completed":true}')
+          echo "$RESULT"
+          COMPLETED=$(echo "$RESULT" | python3 -c "import sys,json; print(json.load(sys.stdin)['completed'])")
+          [ "$COMPLETED" = "True" ] || (echo "ERROR: task not marked completed" && exit 1)
+          echo "✓ PUT /tasks/$TASK_ID updated successfully"
+
+      - name: TEST — POST /tasks (second task for WS broadcast test)
+        run: |
+          echo "=== POST second task ==="
+          curl -sf -X POST http://localhost:4000/tasks \
+            -H "Content-Type: application/json" \
+            -d '{"title":"Second CI Task","description":"For delete test"}' | tee /tmp/task2.json
+          TASK2_ID=$(python3 -c "import json; print(json.load(open('/tmp/task2.json'))['id'])")
+          echo "TASK2_ID=$TASK2_ID" >> $GITHUB_ENV
+          echo "✓ Second task created"
+
+      - name: TEST — DELETE /tasks/:id
+        run: |
+          echo "=== DELETE /tasks/$TASK2_ID ==="
+          RESULT=$(curl -sf -X DELETE http://localhost:4000/tasks/$TASK2_ID)
+          echo "$RESULT"
+          echo "$RESULT" | python3 -c "import sys,json; data=json.load(sys.stdin); assert data.get('success')==True"
+          echo "✓ DELETE /tasks/$TASK2_ID succeeded"
+
+      - name: TEST — GET /tasks (verify list after ops)
+        run: |
+          echo "=== Final GET /tasks ==="
+          RESULT=$(curl -sf http://localhost:4000/tasks)
+          echo "$RESULT"
+          COUNT=$(echo "$RESULT" | python3 -c "import sys,json; print(len(json.load(sys.stdin)))")
+          echo "Tasks in DB: $COUNT"
+          echo "✓ Final state verified"
+
+      - name: TEST — Frontend serves HTML
+        run: |
+          echo "=== GET http://localhost:3000 ==="
+          RESULT=$(curl -sf http://localhost:3000)
+          echo "$RESULT" | grep -q "<div id=\"app\">" || (echo "ERROR: index.html missing #app div" && exit 1)
+          echo "✓ Frontend is serving index.html"
+
+      # ── 11. Вывод логов (всегда, для отладки) ────────────────────────────────
+      - name: Print container logs
+        if: always()
+        run: |
+          echo "=== Backend logs ==="
+          docker logs todo-back || true
+          echo "=== DB logs (last 20 lines) ==="
+          docker logs --tail=20 todo-db || true
+
+      # ── 12. Остановка и очистка контейнеров ──────────────────────────────────
+      - name: Stop and remove containers
+        if: always()
+        run: |
+          docker stop todo-front todo-back todo-db 2>/dev/null || true
+          docker rm   todo-front todo-back todo-db 2>/dev/null || true
+          docker volume rm todo_pgdata 2>/dev/null || true
+          docker network rm todo-net 2>/dev/null || true
+          echo "✓ Cleanup done"
+
+      # ── 13. Тегируем и пушим образы на Docker Hub ────────────────────────────
+      - name: Tag and push images to Docker Hub
+        # Пушим только при пуше в main/master (не на PR)
+        if: github.event_name == 'push'
+        run: |
+          docker tag todo-db       ${{ secrets.DOCKERHUB_USERNAME }}/todo-db:latest
+          docker tag todo-backend  ${{ secrets.DOCKERHUB_USERNAME }}/todo-backend:latest
+          docker tag todo-frontend ${{ secrets.DOCKERHUB_USERNAME }}/todo-frontend:latest
+
+          docker push ${{ secrets.DOCKERHUB_USERNAME }}/todo-db:latest
+          docker push ${{ secrets.DOCKERHUB_USERNAME }}/todo-backend:latest
+          docker push ${{ secrets.DOCKERHUB_USERNAME }}/todo-frontend:latest
+
+          echo "✓ All images pushed to Docker Hub"
+
+      # ── 14. Удаляем образы после пуша ────────────────────────────────────────
+      - name: Remove local images
+        if: always()
+        run: |
+          docker rmi todo-db todo-backend todo-frontend 2>/dev/null || true
+          docker rmi \
+            ${{ secrets.DOCKERHUB_USERNAME }}/todo-db:latest \
+            ${{ secrets.DOCKERHUB_USERNAME }}/todo-backend:latest \
+            ${{ secrets.DOCKERHUB_USERNAME }}/todo-frontend:latest \
+            2>/dev/null || true
+          echo "✓ Local images removed"

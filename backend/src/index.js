@@ -1,8 +1,10 @@
 // backend/src/index.js
 require('dotenv').config();
+const http = require('http');
 const express = require('express');
 const bodyParser = require('body-parser');
 const cors = require('cors');
+const { WebSocketServer } = require('ws');
 const db = require('./db');
 const { sendMail, checkImap, checkPop3 } = require('./mail');
 
@@ -12,7 +14,53 @@ app.use(bodyParser.json());
 
 const PORT = process.env.PORT || 4000;
 
-// ─── TASKS CRUD ──────────────────────────────────────────────────────────────
+// ─── HTTP SERVER (нужен для совместного использования с WS) ──────────────────
+const server = http.createServer(app);
+
+// ─── WEBSOCKET SERVER ─────────────────────────────────────────────────────────
+const wss = new WebSocketServer({ server, path: '/ws' });
+
+// Рассылка события всем подключённым клиентам
+function broadcast(event) {
+    const payload = JSON.stringify(event);
+    wss.clients.forEach(client => {
+        if (client.readyState === 1) { // OPEN
+            client.send(payload);
+        }
+    });
+}
+
+wss.on('connection', (ws, req) => {
+    console.log(`[WS] Client connected. Total: ${wss.clients.size}`);
+
+    // Пинг каждые 30 сек, чтобы не закрывалось соединение
+    ws.isAlive = true;
+    ws.on('pong', () => { ws.isAlive = true; });
+
+    ws.on('close', () => {
+        console.log(`[WS] Client disconnected. Total: ${wss.clients.size}`);
+    });
+
+    ws.on('error', err => {
+        console.error('[WS] Client error:', err.message);
+    });
+
+    // Отправляем приветственное сообщение с текущим количеством клиентов
+    ws.send(JSON.stringify({ type: 'connected', clientCount: wss.clients.size }));
+});
+
+// Пинг-понг для обнаружения мёртвых соединений
+const pingInterval = setInterval(() => {
+    wss.clients.forEach(ws => {
+        if (!ws.isAlive) return ws.terminate();
+        ws.isAlive = false;
+        ws.ping();
+    });
+}, 30000);
+
+wss.on('close', () => clearInterval(pingInterval));
+
+// ─── TASKS CRUD ───────────────────────────────────────────────────────────────
 
 app.get('/tasks', async (req, res) => {
     try {
@@ -40,7 +88,9 @@ app.post('/tasks', async (req, res) => {
             'INSERT INTO tasks(title, description) VALUES($1,$2) RETURNING *',
             [title, description]
         );
-        res.status(201).json(result.rows[0]);
+        const task = result.rows[0];
+        broadcast({ type: 'task_created', payload: task });
+        res.status(201).json(task);
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
@@ -54,7 +104,9 @@ app.put('/tasks/:id', async (req, res) => {
             [title, description, completed, Number(req.params.id)]
         );
         if (result.rowCount === 0) return res.status(404).json({ error: 'Not found' });
-        res.json(result.rows[0]);
+        const task = result.rows[0];
+        broadcast({ type: 'task_updated', payload: task });
+        res.json(task);
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
@@ -64,6 +116,8 @@ app.delete('/tasks/:id', async (req, res) => {
     try {
         const result = await db.query('DELETE FROM tasks WHERE id=$1 RETURNING *', [Number(req.params.id)]);
         if (result.rowCount === 0) return res.status(404).json({ error: 'Not found' });
+        const task = result.rows[0];
+        broadcast({ type: 'task_deleted', payload: { id: task.id } });
         res.json({ success: true });
     } catch (err) {
         res.status(500).json({ error: err.message });
@@ -79,7 +133,6 @@ app.post('/tasks/:id/send', async (req, res) => {
 
         const task = taskRes.rows[0];
         const { to } = req.body;
-
         if (!to) return res.status(400).json({ error: 'Email address (to) is required' });
 
         const info = await sendMail({
@@ -141,8 +194,20 @@ app.get('/email/pop3', async (req, res) => {
     }
 });
 
+// ─── HEALTH CHECK (для CI/CD) ─────────────────────────────────────────────────
+
+app.get('/health', async (req, res) => {
+    try {
+        await db.query('SELECT 1');
+        res.json({ status: 'ok', ws_clients: wss.clients.size });
+    } catch (err) {
+        res.status(503).json({ status: 'error', error: err.message });
+    }
+});
+
 // ─── START ────────────────────────────────────────────────────────────────────
 
-app.listen(PORT, () => {
-    console.log(`Backend listening on port ${PORT}`);
+server.listen(PORT, () => {
+    console.log(`Backend + WebSocket listening on port ${PORT}`);
+    console.log(`WebSocket endpoint: ws://localhost:${PORT}/ws`);
 });

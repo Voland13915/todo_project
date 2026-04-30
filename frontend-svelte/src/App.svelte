@@ -65,8 +65,11 @@
           wsClients = msg.clientCount
           break
 
+        case 'client_count':
+          wsClients = msg.clientCount
+          break
+
         case 'task_created':
-          // Добавляем только если задачи ещё нет (избегаем дублирование от своего POST)
           if (!todos.find(t => t.id === msg.payload.id)) {
             todos = [...todos, msg.payload]
             showToast(`New task added: "${msg.payload.title}"`, true)
@@ -144,7 +147,6 @@
         body: JSON.stringify({ title: createTitle.trim(), description: createDesc.trim() })
       })
       const task = await res.json()
-      // Добавляем сразу локально (WS событие придёт другим)
       if (!todos.find(t => t.id === task.id)) {
         todos = [...todos, task]
       }
@@ -164,7 +166,6 @@
       body: JSON.stringify({ title: todo.title, description: todo.description, completed: !todo.completed })
     })
     const updated = await res.json()
-    // Обновляем локально немедленно (WS обновит других)
     todos = todos.map(t => t.id === updated.id ? updated : t)
   }
 
@@ -305,7 +306,6 @@
     <div class="topbar-right">
       <span class="chip">{totalCount} tasks</span>
       <span class="chip chip-green">{doneCount} done</span>
-      <!-- WS статус -->
       <span class="ws-indicator" class:ws-open={wsStatus==='open'} class:ws-closed={wsStatus==='closed'} class:ws-connecting={wsStatus==='connecting'} title="WebSocket: {wsStatus}">
         <span class="ws-dot"></span>
         {#if wsStatus === 'open'}
@@ -816,10 +816,7 @@
     box-shadow: 0 4px 24px rgba(0,0,0,.15); animation: rowIn .2s ease; z-index: 200;
     display: flex; align-items: center; gap: .5rem;
   }
-  /* Тост от другого пользователя — чуть другой цвет */
-  .toast-remote {
-    background: #1d4ed8;
-  }
+  .toast-remote { background: #1d4ed8; }
 
   /* ── Email Protocols ── */
   .proto-section { margin-top: 2rem; }

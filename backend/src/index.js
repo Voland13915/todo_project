@@ -14,17 +14,16 @@ app.use(bodyParser.json());
 
 const PORT = process.env.PORT || 4000;
 
-// ─── HTTP SERVER (нужен для совместного использования с WS) ──────────────────
+// ─── HTTP SERVER ──────────────────────────────────────────────────────────────
 const server = http.createServer(app);
 
 // ─── WEBSOCKET SERVER ─────────────────────────────────────────────────────────
 const wss = new WebSocketServer({ server, path: '/ws' });
 
-// Рассылка события всем подключённым клиентам
 function broadcast(event) {
     const payload = JSON.stringify(event);
     wss.clients.forEach(client => {
-        if (client.readyState === 1) { // OPEN
+        if (client.readyState === 1) {
             client.send(payload);
         }
     });
@@ -33,20 +32,27 @@ function broadcast(event) {
 wss.on('connection', (ws, req) => {
     console.log(`[WS] Client connected. Total: ${wss.clients.size}`);
 
-    // Пинг каждые 30 сек, чтобы не закрывалось соединение
     ws.isAlive = true;
     ws.on('pong', () => { ws.isAlive = true; });
 
     ws.on('close', () => {
         console.log(`[WS] Client disconnected. Total: ${wss.clients.size}`);
+        broadcast({ type: 'client_count', clientCount: wss.clients.size });
     });
 
     ws.on('error', err => {
         console.error('[WS] Client error:', err.message);
     });
 
-    // Отправляем приветственное сообщение с текущим количеством клиентов
+    // Новому клиенту — актуальный счётчик
     ws.send(JSON.stringify({ type: 'connected', clientCount: wss.clients.size }));
+
+    // Остальным (исключая нового) — обновлённый счётчик
+    wss.clients.forEach(client => {
+        if (client !== ws && client.readyState === 1) {
+            client.send(JSON.stringify({ type: 'client_count', clientCount: wss.clients.size }));
+        }
+    });
 });
 
 // Пинг-понг для обнаружения мёртвых соединений
@@ -194,7 +200,7 @@ app.get('/email/pop3', async (req, res) => {
     }
 });
 
-// ─── HEALTH CHECK (для CI/CD) ─────────────────────────────────────────────────
+// ─── HEALTH CHECK ─────────────────────────────────────────────────────────────
 
 app.get('/health', async (req, res) => {
     try {
